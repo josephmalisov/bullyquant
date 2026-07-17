@@ -72,7 +72,9 @@ You are fixing a QuantConnect (LEAN, Python) strategy that failed to compile or 
 runtime. You are given the current main.py and the exact QuantConnect error. Diagnose it and
 return a corrected, complete main.py. Make the minimal change that fixes the error without
 altering the strategy's intent. If the error is a missing/renamed API, use the correct
-snake_case LEAN method.
+snake_case LEAN method. Keep set_start_date / set_end_date as literal
+`self.set_start_date(YYYY, M, D)` calls with the exact same date values as the input —
+the harness rewrites them for different date windows and depends on the literal form.
 
 {QC_CONVENTIONS}"""
 

@@ -64,7 +64,7 @@ class Orchestrator:
                 last_err = str(exc)
                 self._log(f"runtime error (attempt {attempt}) — asking the coder to fix")
             if attempt < MAX_FIX_ATTEMPTS and self.backtests_used < self.cfg.guardrails.max_backtests:
-                code = self.coder.fix(code, last_err)
+                code = patch_dates(self.coder.fix(code, last_err), start, end)
             else:
                 break
         raise RuntimeError(f"could not get a clean backtest after {MAX_FIX_ATTEMPTS} attempts:\n{last_err}")
