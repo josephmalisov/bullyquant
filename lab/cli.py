@@ -59,6 +59,42 @@ def _cmd_run(args) -> int:
     return 0
 
 
+def _cmd_daily(args) -> int:
+    cfg = Config.from_env()
+    cfg.require_qc()
+    cfg.require_anthropic()
+
+    from dataclasses import replace
+    if args.start or args.end or args.oos_start or args.oos_end:
+        cfg.windows = replace(
+            cfg.windows,
+            start=args.start or cfg.windows.start,
+            end=args.end or cfg.windows.end,
+            oos_start=args.oos_start or cfg.windows.oos_start,
+            oos_end=args.oos_end or cfg.windows.oos_end,
+        )
+    if args.population_size or args.survivors or args.iterations or args.max_backtests:
+        cfg.guardrails = replace(
+            cfg.guardrails,
+            population_size=args.population_size or cfg.guardrails.population_size,
+            survivors=args.survivors or cfg.guardrails.survivors,
+            iterations=args.iterations or cfg.guardrails.iterations,
+            max_backtests=args.max_backtests or cfg.guardrails.max_backtests,
+        )
+
+    store = Store(DB_PATH)
+    llm = LLM(cfg, store=store)
+    qc = QCClient(cfg.qc_user_id, cfg.qc_api_token)
+
+    from .orchestrator import Orchestrator
+    orch = Orchestrator(cfg, store, llm, qc)
+    objective = args.objective or DEFAULT_OBJECTIVE
+    campaign_id = orch.run_population_campaign(objective)
+    print(f"\nCampaign #{campaign_id} complete. Report: data/reports/campaign_{campaign_id}.html")
+    store.close()
+    return 0
+
+
 def _cmd_report(args) -> int:
     from . import reporter
     store = Store(DB_PATH)
@@ -101,6 +137,23 @@ def main(argv=None) -> int:
     p_run.add_argument("--oos-start", default="")
     p_run.add_argument("--oos-end", default="")
     p_run.set_defaults(func=_cmd_run)
+
+    p_daily = sub.add_parser(
+        "daily",
+        help="seed N random strategies, keep the best, iterate, and email the top results "
+             "(the mode meant for a daily cron/Railway run)",
+    )
+    p_daily.add_argument("--objective", "-o", default="", help="what a 'good' strategy means")
+    p_daily.add_argument("--population-size", type=int, default=0, help="fresh ideas to seed (default 5)")
+    p_daily.add_argument("--survivors", type=int, default=0, help="top ideas to keep and iterate (default 3)")
+    p_daily.add_argument("--iterations", type=int, default=0,
+                         help="max generations per surviving lineage, including the seed (default 5)")
+    p_daily.add_argument("--max-backtests", type=int, default=0)
+    p_daily.add_argument("--start", default="")
+    p_daily.add_argument("--end", default="")
+    p_daily.add_argument("--oos-start", default="")
+    p_daily.add_argument("--oos-end", default="")
+    p_daily.set_defaults(func=_cmd_daily)
 
     p_report = sub.add_parser("report", help="re-render a campaign report")
     p_report.add_argument("campaign_id", type=int)

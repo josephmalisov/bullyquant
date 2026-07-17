@@ -226,6 +226,185 @@ class Orchestrator:
         self._finalize(campaign_id)
         return campaign_id
 
+    # ── population campaign (seed N ideas, keep top K, iterate each) ──────────
+
+    def run_population_campaign(self, objective: str) -> int:
+        """Seed `population_size` independent ideas, backtest each once on the
+        primary window, keep the best `survivors`, and iterate each survivor
+        up to `iterations` more generations (analyst-improve -> backtest).
+        Emails the best generation from each surviving lineage at the end."""
+        g = self.cfg.guardrails
+        params = {
+            "windows": vars(self.cfg.windows),
+            "models": vars(self.cfg.models),
+            "guardrails": vars(g),
+            "mode": "population",
+        }
+        campaign_id = self.store.create_campaign(objective, params)
+        self.llm.campaign_id = campaign_id
+        self._log(f"campaign #{campaign_id} (population): {objective}")
+
+        lineages = []
+        for i in range(1, g.population_size + 1):
+            self.llm.generation_id = None
+            try:
+                idea = self.ideator.propose(objective, memory="")
+            except Exception as exc:
+                self._log(f"idea {i} failed: {exc}")
+                continue
+            lineages.append({
+                "lineage": i,
+                "candidate": {"name": idea["name"], "hypothesis": idea["hypothesis"],
+                             "code": idea["code"], "parent_id": None, "lineage": i},
+                "best_score": None, "best_gen_id": None,
+                "last_code": None, "last_result": None, "last_validation": None,
+                "memory_lines": [], "alive": True,
+            })
+
+        gen_number = 0
+        for lineage in lineages:
+            if self.backtests_used >= g.max_backtests:
+                break
+            gen_number += 1
+            self._run_lineage_generation(campaign_id, lineage, gen_number, objective)
+
+        scored = sorted((l for l in lineages if l["best_score"] is not None),
+                        key=lambda l: l["best_score"], reverse=True)
+        survivors = scored[: g.survivors]
+        self._log(f"population seeded: {len(scored)}/{len(lineages)} backtested cleanly "
+                  f"— keeping top {len(survivors)} for iteration")
+        for l in survivors:
+            self._log(f"  lineage {l['lineage']} '{l['candidate']['name']}': "
+                      f"score {l['best_score']:.3f}")
+
+        for it in range(2, g.iterations + 1):
+            if self.backtests_used >= g.max_backtests:
+                self._log("backtest budget exhausted — stopping iteration")
+                break
+            any_active = False
+            for lineage in survivors:
+                if not lineage["alive"] or self.backtests_used >= g.max_backtests:
+                    continue
+                try:
+                    self.llm.generation_id = None
+                    proposal = self.analyst.improve(
+                        objective, lineage["last_code"], lineage["last_result"].statistics,
+                        {"score": lineage["best_score"]}, lineage["last_validation"],
+                    )
+                    lineage["candidate"] = {
+                        "name": lineage["candidate"]["name"], "hypothesis": lineage["candidate"]["hypothesis"],
+                        "code": proposal["code"], "parent_id": lineage["best_gen_id"],
+                        "lineage": lineage["lineage"],
+                    }
+                except Exception as exc:
+                    self._log(f"lineage {lineage['lineage']}: analyst failed ({exc}) — dropping it")
+                    lineage["alive"] = False
+                    continue
+                gen_number += 1
+                self._run_lineage_generation(campaign_id, lineage, gen_number, objective)
+                any_active = True
+            if not any_active:
+                break
+
+        self._finalize_population(campaign_id, survivors)
+        return campaign_id
+
+    def _run_lineage_generation(self, campaign_id: int, lineage: dict, gen_number: int,
+                                objective: str) -> None:
+        """Backtest `lineage["candidate"]` once and fold the result back into
+        the lineage's running state (best score/gen, memory, last result)."""
+        candidate = lineage["candidate"]
+        gen_id = self.store.add_generation(
+            campaign_id, gen_number, parent_id=candidate["parent_id"],
+            lineage=candidate["lineage"], name=candidate["name"],
+            hypothesis=candidate["hypothesis"], code=candidate["code"],
+        )
+        self.llm.generation_id = gen_id
+        self._log(f"── generation {gen_number}: {candidate['name']} (lineage {candidate['lineage']})")
+
+        project_name = f"BQ c{campaign_id} g{gen_number} {candidate['name']}"[:100]
+        try:
+            project_id = self.qc.create_project(project_name)
+            result, final_code = self._build_and_backtest(
+                project_id, candidate["code"], candidate["name"],
+                self.cfg.windows.start, self.cfg.windows.end,
+            )
+        except Exception as exc:
+            self._log(f"generation failed: {exc}")
+            self.store.update_generation(gen_id, status="failed", error=str(exc)[:2000])
+            lineage["memory_lines"].append(f"Gen {gen_number} '{candidate['name']}': FAILED ({str(exc)[:160]}).")
+            lineage["alive"] = False
+            return
+
+        sb = score_stats(result.statistics, self.cfg.objective)
+        self.store.update_generation(
+            gen_id, status="scored", code=final_code, project_id=project_id,
+            backtest_id=result.backtest_id, url=result.url, stats=result.statistics,
+            score=sb.score, score_breakdown=sb.as_dict(),
+        )
+        self._log(f"score {sb.score:.3f} | ann.ret {sb.car:.1%} | sharpe {sb.sharpe:.2f} "
+                  f"| maxDD {sb.drawdown:.1%} | trades {sb.trades} | {result.url}")
+
+        lineage["last_code"], lineage["last_result"] = final_code, result
+
+        improved = lineage["best_score"] is None or sb.score > lineage["best_score"] + 1e-9
+        if improved:
+            lineage["best_score"], lineage["best_gen_id"] = sb.score, gen_id
+            campaign = self.store.get_campaign(campaign_id)
+            if campaign is not None and (campaign.get("best_score") is None or sb.score > campaign["best_score"]):
+                self.store.update_campaign(campaign_id, best_score=sb.score, best_gen_id=gen_id)
+
+        validation = None
+        if sb.score >= self.cfg.thresholds.validate_score:
+            report = self._run_validation(final_code, result, sb.score, project_id)
+            validation = report.as_dict()
+            lineage["last_validation"] = validation
+            self.store.update_generation(gen_id, validation=validation, status="validated")
+            self._log(f"anti-cheat verdict: {report.verdict} (trust {report.trust_score:.2f}, "
+                      f"{len(report.flags)} flags)")
+            gen_row = self.store.get_generation(gen_id)
+            if report.verdict == "clean" and improved:
+                self._alert("winner", self.store.get_campaign(campaign_id), gen_row)
+            elif report.verdict in ("suspicious", "cheating"):
+                self._alert("flag", self.store.get_campaign(campaign_id), gen_row)
+        else:
+            lineage["last_validation"] = None
+
+        lineage["memory_lines"].append(
+            f"Gen {gen_number} '{candidate['name']}': score {sb.score:.3f} "
+            f"(ann.ret {sb.car:.1%}, sharpe {sb.sharpe:.2f}, maxDD {sb.drawdown:.1%}, "
+            f"trades {sb.trades})" + (f", anti-cheat {validation['verdict']}." if validation else ".")
+        )
+
+    def _finalize_population(self, campaign_id: int, survivors: list[dict]) -> None:
+        self.store.update_campaign(campaign_id, status="done")
+        campaign = self.store.get_campaign(campaign_id)
+        gens = self.store.get_generations(campaign_id)
+        usage = self.store.usage_totals(campaign_id)
+        try:
+            path = reporter.write_report(campaign, gens, usage)
+            self._log(f"report written: {path}")
+        except Exception:
+            self._log("report generation failed:\n" + traceback.format_exc())
+
+        top = sorted((l for l in survivors if l["best_gen_id"] is not None),
+                    key=lambda l: l["best_score"], reverse=True)
+        top_gens = [self.store.get_generation(l["best_gen_id"]) for l in top]
+        self._log(f"final top {len(top_gens)}: " +
+                  ", ".join(f"{g['name']} ({g['score']:.3f})" for g in top_gens))
+
+        if self.cfg.email.configured:
+            html = reporter.top_n_report_html(campaign, top_gens)
+            ok = emailer.send(
+                self.cfg.email,
+                f"[BullyQuant] Daily run #{campaign_id} — top {len(top_gens)} strateg"
+                f"{'y' if len(top_gens) == 1 else 'ies'}",
+                html,
+            )
+            self._log("top-N email sent" if ok else "top-N email not sent")
+        else:
+            self._log("email not configured — report written to disk only")
+
     def _fresh_idea(self, objective: str, memory_lines: list[str], lineage: int) -> dict:
         self.llm.generation_id = None
         idea = self.ideator.propose(objective, memory="\n".join(memory_lines[-12:]))

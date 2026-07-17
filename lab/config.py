@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -112,6 +113,41 @@ class Windows:
     oos_start: str = "2024-01-01"
     oos_end: str = "2026-01-01"
 
+    @classmethod
+    def rolling(cls, *, years: int = 4, oos_months: int = 6, today: date | None = None) -> "Windows":
+        """A window covering the trailing `years`, with the most recent
+        `oos_months` carved off as the anti-cheat out-of-sample holdout — so
+        "backtest on the past N years" and the OOS re-run stay consistent
+        without hand-maintained date strings."""
+        today = today or date.today()
+        start = today.replace(year=today.year - years)
+        oos_start_month = today.month - oos_months
+        oos_year = today.year + (oos_start_month - 1) // 12
+        oos_month = (oos_start_month - 1) % 12 + 1
+        oos_start = today.replace(year=oos_year, month=oos_month)
+        return cls(
+            start=start.isoformat(), end=oos_start.isoformat(),
+            oos_start=oos_start.isoformat(), oos_end=today.isoformat(),
+        )
+
+
+def _windows_from_env() -> "Windows":
+    """Explicit BQ_START/BQ_END/etc. win; otherwise a rolling trailing-4-year
+    window (recomputed from today) so the loop stays "current" without
+    editing dates by hand."""
+    if any(os.environ.get(k) for k in ("BQ_START", "BQ_END", "BQ_OOS_START", "BQ_OOS_END")):
+        default = Windows.rolling()
+        return Windows(
+            start=os.environ.get("BQ_START") or default.start,
+            end=os.environ.get("BQ_END") or default.end,
+            oos_start=os.environ.get("BQ_OOS_START") or default.oos_start,
+            oos_end=os.environ.get("BQ_OOS_END") or default.oos_end,
+        )
+    return Windows.rolling(
+        years=_i("BQ_WINDOW_YEARS", 4),
+        oos_months=_i("BQ_OOS_MONTHS", 6),
+    )
+
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 
@@ -134,9 +170,14 @@ class Email:
 @dataclass(frozen=True)
 class Guardrails:
     max_generations: int = 8
-    max_backtests: int = 24
+    max_backtests: int = 40
     plateau_patience: int = 3
     token_budget: int = 0  # 0 = unlimited
+    # Population-based ("daily") campaigns: seed this many fresh ideas,
+    # keep the best `survivors`, and iterate each up to `iterations` times.
+    population_size: int = 5
+    survivors: int = 3
+    iterations: int = 5
 
 
 # ── Top-level config ──────────────────────────────────────────────────────────
@@ -168,12 +209,7 @@ class Config:
                 cheap=os.environ.get("BQ_MODEL_CHEAP") or Models.cheap,
                 ideate_with_frontier=_b("BQ_IDEATE_WITH_FRONTIER", True),
             ),
-            windows=Windows(
-                start=os.environ.get("BQ_START") or Windows.start,
-                end=os.environ.get("BQ_END") or Windows.end,
-                oos_start=os.environ.get("BQ_OOS_START") or Windows.oos_start,
-                oos_end=os.environ.get("BQ_OOS_END") or Windows.oos_end,
-            ),
+            windows=_windows_from_env(),
             email=Email(
                 host=os.environ.get("EMAIL_SMTP_HOST", ""),
                 port=_i("EMAIL_SMTP_PORT", 587),
@@ -187,6 +223,9 @@ class Config:
                 max_backtests=_i("BQ_MAX_BACKTESTS", 24),
                 plateau_patience=_i("BQ_PLATEAU_PATIENCE", 3),
                 token_budget=_i("BQ_TOKEN_BUDGET", 0),
+                population_size=_i("BQ_POPULATION_SIZE", 5),
+                survivors=_i("BQ_SURVIVORS", 3),
+                iterations=_i("BQ_ITERATIONS", 5),
             ),
         )
 

@@ -55,11 +55,16 @@ Optional:
 ## Run
 
 ```bash
-# Autonomous campaign (uses the default objective if you omit --objective)
+# Autonomous single-lineage campaign (uses the default objective if you omit --objective)
 python -m lab run --objective "Maximize risk-adjusted annualized return on liquid US ETFs" \
     --max-generations 8
 
-# Custom windows (in-sample and the anti-cheat out-of-sample holdout come from .env)
+# Daily mode: seed 5 random ideas, keep the best 3, iterate each up to 5 times,
+# and email the top 3 at the end. This is what the Railway cron runs every morning.
+python -m lab daily --objective "Maximize risk-adjusted annualized return on liquid US ETFs" \
+    --population-size 5 --survivors 3 --iterations 5
+
+# Custom windows (defaults roll automatically — trailing 4y with a 6mo OOS holdout)
 python -m lab run --start 2021-01-01 --end 2023-01-01 --oos-start 2023-01-01 --oos-end 2025-01-01
 
 python -m lab list                 # list campaigns
@@ -69,6 +74,44 @@ python -m lab report <campaign_id> # re-render a campaign's HTML report
 The loop is a plain CLI process — run it locally, in a `tmux`/`screen`, or on any host
 or cron. All state lives in `data/bullyquant.db` so a finished campaign is fully
 inspectable.
+
+### `run` vs `daily`
+
+- **`run`** — one lineage: ideate once, then the analyst repeatedly proposes the next
+  improvement to *that same strategy* until a plateau, cap, or budget is hit. Emails a
+  full campaign report plus winner/flag alerts as it goes.
+- **`daily`** — a small population: seed `--population-size` (default 5) independent
+  ideas, backtest each once, keep the best `--survivors` (default 3), then iterate each
+  survivor up to `--iterations` generations total (default 5, seed included). At the end
+  it emails the best generation from each surviving lineage — the "top 3" — in one
+  message. This is the mode meant for a recurring/cron run.
+
+Both modes share the same guardrails, scorer, and anti-cheat gate; tune them via
+`BQ_POPULATION_SIZE` / `BQ_SURVIVORS` / `BQ_ITERATIONS` / `BQ_MAX_BACKTESTS` in `.env`
+(see `.env.example`).
+
+## Deploy on Railway (daily cron)
+
+The repo ships a `Dockerfile` and `railway.json` that run `python -m lab daily` on a
+schedule as a [Railway cron job](https://docs.railway.app/reference/cron-jobs).
+
+1. Push this repo to GitHub and create a new Railway project from it (Railway detects
+   the `Dockerfile` automatically).
+2. Add a **volume** mounted at `/app/data` so the SQLite DB (and thus campaign history)
+   survives between runs — without it every run starts from a clean database, which is
+   fine but loses history.
+3. Set the required environment variables in the Railway service (**Variables** tab):
+   `QC_USER_ID`, `QC_API_TOKEN`, `ANTHROPIC_API_KEY`, and the `EMAIL_SMTP_*` / `EMAIL_TO`
+   vars so you actually get the results. Optionally set `BQ_POPULATION_SIZE`,
+   `BQ_SURVIVORS`, `BQ_ITERATIONS`, `BQ_MAX_BACKTESTS`, `BQ_WINDOW_YEARS` to tune it.
+4. `railway.json` sets `cronSchedule` to `0 12 * * *` (12:00 UTC — adjust the hour for
+   your timezone/"morning") and `restartPolicyType: NEVER` so a run that ends (success
+   or failure) doesn't get restarted until the next scheduled fire. Edit the cron
+   expression in `railway.json`, or set it in the Railway dashboard under
+   **Settings → Cron Schedule**, and redeploy.
+
+Each firing is a fresh container: it seeds 5 ideas, backtests them on the trailing
+window, iterates the best 3, and emails you the results, then exits.
 
 ## What "good" means (the objective)
 
@@ -110,6 +153,8 @@ lab/
   cli.py          `python -m lab ...`
 tests/            pytest suite (no network / no API key required)
 data/             gitignored: SQLite DB, HTML reports, archived strategy code
+Dockerfile        image used for local Docker runs and Railway deploys
+railway.json      Railway build/deploy config incl. the daily cron schedule
 ```
 
 ## Tests
