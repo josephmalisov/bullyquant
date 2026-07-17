@@ -14,6 +14,7 @@ import traceback
 from . import emailer, reporter
 from .agents import Analyst, Coder, Ideator, ai_reviewer
 from .config import Config
+from .prompts import IDEATOR_ANGLES
 from .qc_client import CompileError, QCClient, patch_dates
 from .scorer import score as score_stats
 from .store import Store
@@ -251,8 +252,9 @@ class Orchestrator:
                          f"— stopping idea generation at {i - 1}/{g.population_size}")
                 break
             self.llm.generation_id = None
+            angle = IDEATOR_ANGLES[(i - 1) % len(IDEATOR_ANGLES)]
             try:
-                idea = self.ideator.propose(objective, memory="")
+                idea = self.ideator.propose(objective, memory="", angle=angle)
             except Exception as exc:
                 self._log(f"idea {i} failed: {exc}")
                 continue

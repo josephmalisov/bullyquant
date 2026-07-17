@@ -19,13 +19,16 @@ class Ideator:
     def __init__(self, llm):
         self.llm = llm
 
-    def propose(self, objective: str, memory: str = "") -> dict:
+    def propose(self, objective: str, memory: str = "", angle: str = "") -> dict:
         user = f"Objective:\n{objective}\n"
         if memory:
             user += (
                 "\nMemory from past attempts in this campaign (learn from these; do NOT "
                 f"repeat failed ideas, build on what improved the score):\n{memory}\n"
             )
+        if angle:
+            user += f"\nAssigned angle for this idea — build around this, don't default " \
+                    f"to something else:\n{angle}\n"
         user += "\nInvent a new strategy for this objective."
         resp = self.llm.complete("ideator", prompts.IDEATOR_SYSTEM, user,
                                  effort="high", max_tokens=8000)
