@@ -32,6 +32,26 @@ All model ids are overridable in `.env` (`BQ_MODEL_*`). Fable 5 gets a server-si
 refusal fallback to Opus so a safety-classifier false-positive on a strategy prompt
 doesn't stall the loop.
 
+### Controlling spend
+
+`daily` mode calls the ideator `population_size` times and the analyst up to
+`survivors * (iterations - 1)` times per run — that's the bulk of the Anthropic
+cost, well before any QuantConnect usage. Levers, cheapest-and-safest first:
+
+- **Set `BQ_TOKEN_BUDGET`** (USD) in `.env` — both `run` and `daily` check it before
+  each new idea/iteration and stop early once crossed. `.env.example` ships this at
+  `3`; raise or lower it to taste. This is the one guardrail that actually caps a
+  run, so set it before pointing this at an unattended cron.
+- **`BQ_IDEATE_WITH_FRONTIER=false`** (the shipped default) — ideation uses Opus
+  (`strong`) instead of Fable (`frontier`), at roughly half the per-token price, for
+  a small quality trade-off.
+- **Shrink the population** — `BQ_POPULATION_SIZE`, `BQ_SURVIVORS`, `BQ_ITERATIONS`
+  scale LLM calls close to linearly. `3 / 2 / 3` costs noticeably less than the
+  `5 / 3 / 5` default and still gives the analyst room to iterate.
+- **Downgrade `BQ_MODEL_FRONTIER`** to `claude-sonnet-5` (or another mid-tier model)
+  if you want the analyst/ideator on the same tier as code generation — cuts the
+  single most expensive line item at a real quality cost.
+
 ## Setup
 
 ```bash

@@ -66,7 +66,11 @@ class Models:
     strong: str = "claude-opus-4-8"    # anti-cheat adversarial review
     mid: str = "claude-sonnet-5"       # code generation + error repair
     cheap: str = "claude-haiku-4-5"    # extraction, naming, summaries
-    ideate_with_frontier: bool = True  # else ideation uses `strong`
+    # Ideation defaults to `strong` (Opus, ~half the frontier per-token price):
+    # `daily` mode calls the ideator `population_size` times per run, so this
+    # tier choice is one of the biggest cost levers. Set true to use `frontier`
+    # (Fable) for ideation too, at higher quality and higher cost.
+    ideate_with_frontier: bool = False
 
     @property
     def ideator(self) -> str:
@@ -214,7 +218,7 @@ class Config:
                 strong=os.environ.get("BQ_MODEL_STRONG") or Models.strong,
                 mid=os.environ.get("BQ_MODEL_MID") or Models.mid,
                 cheap=os.environ.get("BQ_MODEL_CHEAP") or Models.cheap,
-                ideate_with_frontier=_b("BQ_IDEATE_WITH_FRONTIER", True),
+                ideate_with_frontier=_b("BQ_IDEATE_WITH_FRONTIER", False),
             ),
             windows=_windows_from_env(),
             email=Email(

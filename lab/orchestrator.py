@@ -246,6 +246,10 @@ class Orchestrator:
 
         lineages = []
         for i in range(1, g.population_size + 1):
+            if g.token_budget and self.llm.spend_usd() >= g.token_budget:
+                self._log(f"token/spend budget reached (~${self.llm.spend_usd():.2f}) "
+                         f"— stopping idea generation at {i - 1}/{g.population_size}")
+                break
             self.llm.generation_id = None
             try:
                 idea = self.ideator.propose(objective, memory="")
@@ -265,6 +269,9 @@ class Orchestrator:
         for lineage in lineages:
             if self.backtests_used >= g.max_backtests:
                 break
+            if g.token_budget and self.llm.spend_usd() >= g.token_budget:
+                self._log(f"token/spend budget reached (~${self.llm.spend_usd():.2f}) — stopping seeding")
+                break
             gen_number += 1
             self._run_lineage_generation(campaign_id, lineage, gen_number, objective)
 
@@ -280,6 +287,9 @@ class Orchestrator:
         for it in range(2, g.iterations + 1):
             if self.backtests_used >= g.max_backtests:
                 self._log("backtest budget exhausted — stopping iteration")
+                break
+            if g.token_budget and self.llm.spend_usd() >= g.token_budget:
+                self._log(f"token/spend budget reached (~${self.llm.spend_usd():.2f}) — stopping iteration")
                 break
             any_active = False
             for lineage in survivors:

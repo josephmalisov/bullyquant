@@ -67,7 +67,7 @@ class Analyst:
             parts.append(f"Anti-cheat validation report:\n{json.dumps(validation, indent=2)}\n")
         parts.append("Diagnose and propose the single best next improvement, then give the full revised main.py.")
         resp = self.llm.complete("frontier", prompts.ANALYST_SYSTEM, "\n".join(parts),
-                                 effort="xhigh", max_tokens=12000)
+                                 effort="high", max_tokens=8000)
         code_out = extract_code(resp.text)
         diagnosis, plan = _split_diagnosis_plan(resp.text)
         return {"diagnosis": diagnosis, "plan": plan, "code": code_out, "raw": resp.text}
