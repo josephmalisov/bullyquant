@@ -1,0 +1,15 @@
+# Secrets — never commit. All credentials + your email live here only.
+.env
+.env.local
+
+# Local state: SQLite DB, generated HTML reports, archived strategy code.
+# May reference run-specific data; keep the repo clean and PII-free.
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
