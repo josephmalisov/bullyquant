@@ -139,6 +139,43 @@ def write_report(campaign: dict, gens: list[dict], usage: list[dict],
     return path
 
 
+def top_n_report_html(campaign: dict, top_gens: list[dict]) -> str:
+    """Email body for a population-campaign run: one card per surviving
+    lineage's best generation, ranked highest score first."""
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    cards = []
+    for rank, g in enumerate(top_gens, start=1):
+        sb = g.get("score_breakdown") or {}
+        val = g.get("validation") or {}
+        url = g.get("url") or ""
+        cards.append(f"""
+        <div style="border:1px solid #d0d7de;border-radius:8px;padding:16px;margin:12px 0">
+          <h2 style="margin:0 0 4px">#{rank} — {_esc(g.get('name'))} {_badge(val.get('verdict'))}</h2>
+          <p style="color:#57606a;margin:4px 0">{_esc(g.get('hypothesis'))}</p>
+          <p><b>Score:</b> {_esc(round(g.get('score') or 0, 3))} &nbsp;|&nbsp;
+             <b>Ann.Ret:</b> {_fmt_pct(sb.get('annualized_return'))} &nbsp;|&nbsp;
+             <b>Sharpe:</b> {_esc(sb.get('sharpe'))} &nbsp;|&nbsp;
+             <b>MaxDD:</b> {_fmt_pct(sb.get('drawdown'))} &nbsp;|&nbsp;
+             <b>Trades:</b> {_esc(sb.get('trades'))}</p>
+          {f'<p><a href="{_esc(url)}">Open backtest on QuantConnect</a></p>' if url else ''}
+          {_flags_html(val)}
+          {f"<p><b>AI reviewer:</b> {_esc(val.get('ai_reasons'))}</p>" if val.get('ai_reasons') else ""}
+          <details><summary>main.py</summary>
+          <pre style="background:#f6f8fa;padding:12px;overflow:auto;border-radius:6px">{_esc(g.get('code'))}</pre>
+          </details>
+        </div>""")
+
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>BullyQuant daily run — campaign {_esc(campaign.get('id'))}</title></head>
+<body style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:800px;margin:24px auto;padding:0 16px;color:#1f2328">
+<h1>BullyQuant — top {len(top_gens)} of the day</h1>
+<p style="color:#57606a">{generated}</p>
+<p><b>Objective:</b> {_esc(campaign.get('objective'))}</p>
+{''.join(cards) if cards else '<p>No lineage produced a clean backtest.</p>'}
+</body></html>"""
+
+
 def alert_html(kind: str, campaign: dict, gen: dict) -> str:
     """Small HTML body for a winner/flag alert email."""
     val = gen.get("validation") or {}
