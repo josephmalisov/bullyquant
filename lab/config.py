@@ -160,7 +160,14 @@ class Config:
         return cls(
             qc_user_id=os.environ.get("QC_USER_ID", ""),
             qc_api_token=os.environ.get("QC_API_TOKEN", ""),
-            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            # BQ_ANTHROPIC_API_KEY is an alias honored because some hosts reserve
+            # the plain ANTHROPIC_API_KEY name for their own auth and strip it
+            # from child processes; the standard name still wins when both are set.
+            anthropic_api_key=(
+                os.environ.get("ANTHROPIC_API_KEY")
+                or os.environ.get("BQ_ANTHROPIC_API_KEY")
+                or ""
+            ),
             models=Models(
                 frontier=os.environ.get("BQ_MODEL_FRONTIER") or Models.frontier,
                 strong=os.environ.get("BQ_MODEL_STRONG") or Models.strong,
@@ -198,8 +205,9 @@ class Config:
             )
 
     def require_anthropic(self) -> None:
-        if not self.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+        if not self.anthropic_api_key:
             raise RuntimeError(
-                "ANTHROPIC_API_KEY missing. Set it in the environment or .env — the "
+                "ANTHROPIC_API_KEY missing. Set ANTHROPIC_API_KEY (or its "
+                "BQ_ANTHROPIC_API_KEY alias) in the environment or .env — the "
                 "loop needs Claude API access."
             )
