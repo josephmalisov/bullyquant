@@ -104,11 +104,14 @@ schedule as a [Railway cron job](https://docs.railway.app/reference/cron-jobs).
    `QC_USER_ID`, `QC_API_TOKEN`, `ANTHROPIC_API_KEY`, and the `EMAIL_SMTP_*` / `EMAIL_TO`
    vars so you actually get the results. Optionally set `BQ_POPULATION_SIZE`,
    `BQ_SURVIVORS`, `BQ_ITERATIONS`, `BQ_MAX_BACKTESTS`, `BQ_WINDOW_YEARS` to tune it.
-4. `railway.json` sets `cronSchedule` to `0 12 * * *` (12:00 UTC — adjust the hour for
-   your timezone/"morning") and `restartPolicyType: NEVER` so a run that ends (success
-   or failure) doesn't get restarted until the next scheduled fire. Edit the cron
-   expression in `railway.json`, or set it in the Railway dashboard under
-   **Settings → Cron Schedule**, and redeploy.
+4. `railway.json` sets `cronSchedule` to `0 12 * * *` (12:00 UTC = 4:00am Alaska Daylight
+   Time, UTC-8) and `restartPolicyType: NEVER` so a run that ends (success or failure)
+   doesn't get restarted until the next scheduled fire. Railway cron is fixed UTC and
+   does **not** shift for daylight saving, so during Alaska Standard Time (UTC-9,
+   roughly Nov–Mar) this fires at 5:00am local instead of 4:00am — bump it to `0 13 * * *`
+   for that stretch if you want it pinned to 4:00am year-round. Edit the cron expression
+   in `railway.json`, or set it in the Railway dashboard under **Settings → Cron
+   Schedule**, and redeploy.
 
 Each firing is a fresh container: it seeds 5 ideas, backtests them on the trailing
 window, iterates the best 3, and emails you the results, then exits.
